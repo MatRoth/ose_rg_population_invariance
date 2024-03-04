@@ -1,0 +1,2 @@
+This repository contains the replication material for the paper "Harmonizing single item survey questions using equating and linear stretching – Should researchers care about population invariance?".
+To perform the replication, please download/pull the repository to your local machine and put the required date into the data folder. For more information on the required data have a look at the readme.txt in the data folder.
