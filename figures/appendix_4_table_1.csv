@@ -1,0 +1,5 @@
+﻿"Family";"Link function";"R2";"AIC"
+"gaussian";"log";"0,20";"-6848"
+"gaussian";"identity";"0,20";"-6865"
+"gamma";"inverse";"0,29";"-8434"
+"gamma";"log";"0,37";"-8700"

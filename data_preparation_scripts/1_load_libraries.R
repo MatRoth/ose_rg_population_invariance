@@ -1,0 +1,17 @@
+library(tidyverse)
+library(kableExtra)
+library(readxl)
+library(haven)
+library(furrr)
+library(equate)
+library(survey)
+library(mice)
+library(ggh4x)
+library(extrafont)
+library(ggrepel)
+library(patchwork)
+library(ggtext)
+source("data_preparation_scripts/eq_plot.R")
+
+get_labels <- function(x) x %>% summarize(across(everything(),~attributes(.x)$label)) %>% pivot_longer(everything())
+

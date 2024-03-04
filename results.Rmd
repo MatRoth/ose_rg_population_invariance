@@ -1,0 +1,658 @@
+---
+title: "Replication materials"
+author: "Matthias Roth"
+date: "21 9 2022"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+---
+
+
+
+
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(c(echo = FALSE,message = FALSE, warning = FALSE,dev="svglite"))
+trace(recover, sink) #for debugging
+```
+
+
+
+
+```{r echo = FALSE,message = FALSE, warning = FALSE,include=F}
+library(tidyverse)
+library(kableExtra)
+library(readxl)
+library(haven)
+library(furrr)
+library(equate)
+library(survey)
+library(mice)
+library(ggridges)
+library(RProbSup)
+library(lme4)
+library(ggtext)
+library(ggridges)
+
+
+
+source("data_preparation_scripts/eq_plot.R")
+knitr::opts_chunk$set(echo = FALSE,message = FALSE, warning = FALSE)
+trace(recover, sink) #for debugging
+
+```
+
+
+
+# Load and prepare data
+
+The following scripts are sourced, meaning the code from the scripts is executed. 
+They load, clean, impute, create raking weights and finally create the data that is used in the
+figures and models created in this R markdown document.
+
+```{r}
+# load libraries
+set.seed(1234)
+source("data_preparation_scripts/1_load_libraries.R")
+# read in data
+source("data_preparation_scripts/2_read_in_data.R") # Reads in GPANEL and EVS data
+source("data_preparation_scripts/3_add_socio_demographics.R") # add standardized socio-demographic variables to GPANEL and EVS datasets
+source("data_preparation_scripts/4_get_population_marginals.R") # get population marginals from official statistics
+# loads a wrapper function for raking
+source("data_preparation_scripts/5_raking.R")
+# perform single imputation and create raked weights
+source("data_preparation_scripts/6_impute_and_rake.R")
+# loads functions which fetch data for the equating process
+source("data_preparation_scripts/7_fetch_data_for_equating.R")
+# loads function which does the actual equating
+source("data_preparation_scripts/8_group_equating.R")
+# execute the equating with the previously loaded data
+source("data_preparation_scripts/9_perform_equating.R")
+# create analysis data
+source("data_preparation_scripts/10_prepare_harmonized_data_for_analysis.R")
+# calculate r alerting values for 16 instrument pairs
+source("data_preparation_scripts/11_r_alerting.R")
+```
+
+
+# 1. Figures
+
+## Figure 1 Showing OSE-RG with equipercentile equating
+
+```{r }
+eq_model_polint<-analysis_data %>%
+  filter(name=="political interest",data %in% c("full"),translation_table_used %in% c("full")) %>% 
+  pull(equate_model_used) 
+
+plot_eq(x = source_val(eq_model_polint[[1]]),
+        y = target_val(eq_model_polint[[1]]),
+        resp_opt = 2)
+ggsave(filename = "figures/equating_demo.svg",width = 10,height = 5)
+ggsave(filename = "figures/equating_demo.jpg",width = 10,height = 5,device = "jpeg")
+```
+
+## Figure 3 Harmonization error of OSE-RG and LS if linking and research population are identical
+
+```{r}
+analysis_data %>%
+  select(name,full_data,data,translation_table_used,contains("cohen_d_to_target_abs")) %>%
+  pivot_longer(contains("cohen"),names_to = "Harmonization method",values_to = "Cohens d") %>% 
+  filter(data == translation_table_used) %>% 
+  select(-c(data,translation_table_used)) %>% 
+  mutate(full_or_group = if_else(full_data == "Full population data","Full population\n(n=29)","Subpopulation\n(n=348)") %>% factor,
+         `Harmonization method` = if_else(`Harmonization method` == "cohen_d_to_target_abs","OSE-RG","Linear stretching") %>% factor(levels=c("Linear stretching","OSE-RG"),labels = c("Linear stretching","OSE-RG"))) %>% 
+  ggplot(aes(`Harmonization method`,`Cohens d`,color=`Harmonization method`))+
+  geom_boxplot()+
+  scale_color_manual(values = c("grey","#1f78b4"))+
+  labs(y="Harmonization error\nCohens d",
+       x="Harmonization method\neach n=208")+
+  theme_classic(base_size=18)+
+  theme(legend.position = "none")
+
+ggsave(filename = "figures/result_1.svg")
+ggsave(filename = "figures/result_1.jpg",device = "jpeg")
+```
+
+
+## Figure 4 Distribution of harmonization errors in different combinations of linking and research populations
+
+```{r}
+
+gtc_single_labels <- tibble(
+  gtc_shorthand = c("s_s_iden",
+                    "s_s_d",
+                    "f_s",
+                    "s_f",
+                    "f_f",
+                    "s_s_inter"),
+  gtc_label_long = c(
+    "Subpopulation harmonized by identical subpopulation",
+    "Subpopulation harmonized by disjoint subpopulation",
+    "Full population harmonized by subpopulation",
+    "Subpopulation harmonized by full population",
+    "Full population harmonized by full population",
+    "Subpopulation harmonized by intersecting subpopulation"
+  )
+)
+
+
+order_fct_levels <- c("Subpopulation harmonized by identical subpopulation",
+                      "Full population harmonized by full population",
+                      "Subpopulation harmonized by full population",
+                      "Full population harmonized by subpopulation",
+                      "Subpopulation harmonized by intersecting subpopulation",
+                      "Subpopulation harmonized by disjoint subpopulation")
+
+order_fct_labels <- c("(1) Identical subpopulations",
+                      "(2) Full population",
+                      "(3) Full population - Subpopulation",
+                      "(4) Subpopulation - Full population",
+                      "(5) Intersecting subpopulation - Intersecting subpopulation",
+                      "(6) Disjoint subpopulation - Disjoint subpopulation")
+
+prob_sup_data<-analysis_data %>%
+  mutate(correct_table = if_else(data == translation_table_used,"Fitting recoding table used","Non-fitting recoding table used")) %>% 
+  select(correct_table,cohen_d_to_target_abs,cohen_d_to_target_abs_stretched,gtc_shorthand) %>% 
+  pivot_longer(cols = c(cohen_d_to_target_abs,cohen_d_to_target_abs_stretched),names_to = "Harmonization method",values_to = "Cohens d") %>% 
+  mutate(`Harmonization method` = if_else(str_detect(`Harmonization method`,"stretch"),"Linear stretching","OSE-RG") %>% factor) %>% 
+  left_join(gtc_single_labels) %>% 
+  mutate(gtc_lable_long_fct = factor(gtc_label_long,
+                                     levels = order_fct_levels,
+                                     labels = order_fct_labels,
+                                     ordered = T
+                                     ) %>% fct_rev)
+
+prob_sup_data %>%
+  ggplot(aes(`Cohens d`,gtc_lable_long_fct,fill=`Harmonization method`))+
+  stat_density_ridges(quantiles = 2,
+                      quantile_lines = TRUE,
+                      alpha=0.4,
+                      vline_size=0.5,
+                      scale = 1) +
+  labs(y="",x="Harmonization error\n(Cohens d)")+
+  scale_fill_manual(values = c("grey","#1f78b4"))+
+  xlim(c(0,0.75))+theme_classic(base_size = 25)+
+  theme(plot.margin = unit(c(0.5,2,0.1,0),units="cm"),
+        legend.position = "bottom",
+        axis.text.y = element_text(size=30,hjust = 1))
+ggsave(filename = "figures/result_2.svg",width = 20,height = 9)
+ggsave(filename = "figures/result_2.jpg",width = 20,height = 9,device = "jpeg")
+```
+
+## Figure 5 Relation of similarity to harmonization error
+
+Model creation simple->complex
+```{r echo = FALSE,message = FALSE, warning = FALSE}
+model_1<-lm(cohen_d_to_target_abs~similarity,data=analysis_data)
+model_2<-glm(cohen_d_to_target_abs~similarity,data=analysis_data,family=gaussian(link="log"))
+model_3<-glm(cohen_d_to_target_abs~similarity,data=analysis_data,family=Gamma(link="inverse"))
+model_4<-glm(cohen_d_to_target_abs~similarity,data=analysis_data,family=Gamma(link="log"))
+```
+
+```{r}
+#glm_simulation according to:
+# Gelman, A., & Hill, J. (2007). Data analysis using regression and multilevel/hierarchical models. Analytical methods for social research. Cambridge University Press.
+# Chapter 7
+
+winning_model <- model_4
+
+#values to simulate
+values <-seq(0,1,0.01)
+#coef
+intercept <- coef(winning_model)[1]
+slope <- coef(winning_model)[2]
+
+coeffic<-MASS::mvrnorm(n=100,mu=coef(winning_model),Sigma = vcov(winning_model)) %>% as_tibble() %>% rename(intercept=1,slope=2)
+
+task_df <- tibble(similarity=values,coef=list(coeffic)) %>% unnest(coef)
+
+
+disp<- MASS::gamma.dispersion(winning_model)
+simulation <-  pmap(task_df,~tibble(sim=rgamma(1000,shape =1/disp,scale=winning_model$family$linkinv(..2+..3*..1)*disp))) # uses 
+
+result_simulation <- task_df %>%
+  mutate(simulation) %>%
+  unnest(simulation) %>%
+  group_by(similarity) %>%
+  summarize(mean =  mean(sim),
+            median =median(sim),
+            sd =    sd(sim),
+            lwr =   quantile(sim,0.025),
+            upr =   quantile(sim,0.975)) %>% 
+  mutate(fit = predict(winning_model,newdata = tibble(similarity=values),type="response"))
+```
+
+```{r}
+analysis_data %>% 
+  mutate(predictions = predict(winning_model,type="response"),
+         stretching_larger = if_else(cohen_d_to_target_abs_stretched > cohen_d_to_target_abs,"Linear stretching error is larger","OSE-RG error is larger")) %>% 
+  ggplot(aes(similarity,cohen_d_to_target_abs,fill="OSE-RG"))+
+    geom_jitter(aes(similarity,cohen_d_to_target_abs_stretched,fill="Linear stretching"),color="grey",alpha=0.4,width=0.01,size=2)+
+    geom_jitter(alpha=.8,width = 0.01,color="#1f78b4",size=2)+
+    geom_line(aes(similarity,predictions,fill="OSE-RG predicted (with 95% PI)"),size=1.7,color="orange")+
+    geom_line(data=result_simulation,aes(x = similarity,y=upr),alpha=1,linetype="dashed",color="orange",size=1.2)+
+    geom_line(data=result_simulation,aes(x = similarity,y=lwr),alpha=1,linetype="dashed",color="orange",size=1.2)+
+    labs(x="Similarity of linking and research population",
+         y="Harmonization error\nCohens d",
+         fill = "")+
+    geom_smooth(aes(similarity,cohen_d_to_target_abs_stretched,fill="Linear stretching predicted"),method="lm",linetype="solid",color="black",se=F)+
+    theme_classic(base_size = 30)+
+  scale_fill_manual(values=c("grey", "#1f78b4","orange","black"),
+                    labels=c("Linear stretching","OSE-RG","OSE-RG predicted (with 95% PI)","Linear stretching predicted"))+
+  guides(fill = guide_legend(nrow=2,ncol=2,override.aes = list(linetype=c(0,0,1,2),
+                                                 shape=c(16,16,NA,NA),
+                                                 size=2,
+                                                 color = c("grey", "#1f78b4","orange","black"))))+
+  theme(legend.position = "bottom")
+ggsave(filename = "figures/result_3.svg",width = 15,height = 9)
+ggsave(filename = "figures/result_3.jpg",width = 15,height = 9,device = "jpeg")  
+```
+
+
+
+## Figure 6 MLM plot
+
+```{r}
+mlm_data<-analysis_data %>% rename(instrument = name) %>% mutate(
+                                   pop_com = paste0(data,"_",translation_table_used) %>% factor,
+                                   similarity_sqr = similarity^2,
+                                   similarity = similarity)
+
+mlm_model_gamma_inv <- glmer(cohen_d_to_target_abs~similarity+(1|instrument),data=mlm_data,family = Gamma)
+mlm_model_gamma_log <- glmer(cohen_d_to_target_abs~similarity+(1|instrument),data=mlm_data,family = Gamma(link="log"))
+mlm_model_gamma_log_ran_sl <- glmer(cohen_d_to_target_abs~similarity+(similarity|instrument),data=mlm_data,family = Gamma(link="log"))
+
+mlm_models <- list(mlm_model_gamma_log,mlm_model_gamma_log_ran_sl)
+texreg::screenreg(mlm_models,stars = 0.05)
+```
+
+
+```{r}
+#linear stretching mixed effects models
+mlm_model_stretched<-lmer(cohen_d_to_target_abs_stretched~(1|instrument),data = mlm_data)
+mlm_model_stretched_similarity <-lmer(cohen_d_to_target_abs_stretched~similarity+(1|instrument),data = mlm_data)
+mlm_model_stretched_similarity_ran <-lmer(cohen_d_to_target_abs_stretched~similarity+(similarity|instrument),data = mlm_data)
+mlm_model_stretched_models <-list(mlm_model_stretched,mlm_model_stretched_similarity,mlm_model_stretched_similarity_ran)
+```
+
+
+```{r}
+mlm_data %>% mutate("OSE-RG" = predict(mlm_model_gamma_log,type="response") ,
+                    "Linear stretching" = predict(mlm_model_stretched)) %>%
+  pivot_longer(c("OSE-RG","Linear stretching"),names_to = "Harmonization method") %>% 
+  ggplot(aes(similarity,value,color=`Harmonization method`,group=interaction(`Harmonization method`,instrument)))+
+  geom_line(size=0.7)+
+  theme_classic(base_size = 25)+
+    labs(x="Similarity of linking and research population",
+         y="Predicted average\nharmonization error by instrument")+
+  scale_color_manual(values = c("grey","orange")) +
+  theme(legend.position = "bottom")
+
+ggsave(filename = "figures/result_4.svg",width = 10,height = 8)
+ggsave(filename = "figures/result_4.jpg",width = 10,height = 8,device = "jpeg")  
+```
+
+# 2. Tabels
+
+## Table 2 Demonstration of equivalence plot
+
+```{r}
+
+eq_model_polint[[1]]$concordance[,1:2] %>% round(2)
+```
+
+## Table 3 - Methods example
+
+```{r}
+polint_full_applied_to_70 <- analysis_data %>%
+  filter(name=="political interest",data %in% c("full","70 oder älter"),translation_table_used %in% c("full","70 oder älter")) %>% 
+  select(name,data,translation_table_used,cohen_d_to_target_abs) %>% 
+  mutate(cohen_d_to_target_abs = cohen_d_to_target_abs %>% round(2))
+polint_full_applied_to_70
+```
+
+
+## Table 5 - Showing the data structure
+```{r}
+data_to_select<-tibble(
+  instruments_to_select <- c("political interest","political interest","left right","left right"),
+  linking_pop_to_select <- c("full","full","full","female"),
+  research_population_to_select <- c("full","70 oder älter","full","east"))
+  
+pmap_df(data_to_select,~analysis_data %>% filter(name == ..1,translation_table_used == ..2,data == ..3) %>% select(name,translation_table_used,data,cohen_d_to_target_abs,cohen_d_to_target_abs_stretched,similarity)) %>% mutate(across(where(is.numeric),round,2))
+```
+
+
+## Table 6 Probability of superiority of LS to OSE-RG
+
+```{r}
+# Calculate probability of superiority
+#get unique values of group_translation_table_combination and calculate the probability of superiority for each of them
+
+gtc<-analysis_data$gtc_shorthand %>% unique
+
+
+A_values<-map_dfr(gtc,~analysis_data %>%
+      filter(gtc_shorthand == (.x)) %>% 
+      select(cohen_d_to_target_abs_stretched,cohen_d_to_target_abs) %>% 
+      as.matrix %>%
+      A(design = 2,
+        statistic= 3,
+        n.bootstrap = 1000) %>%
+        as_tibble %>%
+        mutate(group_translation_table_combination = .x,
+               .before = 1) %>% 
+        select(A,SE,ci.lower,ci.upper)) %>%
+  mutate(gtc_shorthand = gtc) %>% 
+  rename(probability_of_superiority = A)
+
+
+prob_of_sup<-left_join(analysis_data %>% group_by(gtc_shorthand) %>% filter(cohen_d_to_target_abs_stretched > cohen_d_to_target_abs,.preserve = T) %>% summarize(stretch_larger_than_ose_rg=n()),analysis_data %>% group_by(gtc_shorthand) %>% summarize(total=n())) %>% left_join(A_values,by="gtc_shorthand")
+
+#probability of superiority for equal/unequal linking and research population 
+
+gtc_equal <- c("identical","different")
+
+
+A_values_equal<-map_dfr(gtc_equal,~analysis_data %>%
+      filter(gtc_equal == .x) %>% 
+      select(cohen_d_to_target_abs_stretched,cohen_d_to_target_abs) %>% 
+      as.matrix %>%
+      A(design = 2,
+        statistic= 3,
+        n.bootstrap = 1000) %>%
+        as_tibble %>%
+        mutate(gtc_equal = .x,
+               .before = 1) %>% 
+        select(gtc_equal,A,SE,ci.lower,ci.upper))  %>% 
+  rename(probability_of_superiority = A)
+
+
+prob_of_sup_equal<-left_join(analysis_data %>%
+                               group_by(gtc_equal) %>%
+                               filter(cohen_d_to_target_abs_stretched > cohen_d_to_target_abs,.preserve = T) %>%
+                               summarize(stretch_larger_than_ose_rg=n()),
+                             analysis_data %>%
+                               group_by(gtc_equal) %>%
+                               summarize(total=n())) %>%
+  left_join(A_values_equal,by="gtc_equal") 
+
+prob_of_sup_table_data<- analysis_data %>%
+   group_by(gtc_equal) %>%
+   summarize(median_ose_rg = median(cohen_d_to_target_abs),
+             median_ls = median(cohen_d_to_target_abs_stretched)) %>% 
+   mutate(dif = abs(median_ose_rg-median_ls)) %>% right_join(prob_of_sup_equal)
+
+```
+
+```{r fig.width=16}
+prob_sup_data_table<-prob_sup_data %>%
+  select(gtc_shorthand,correct_table,`Harmonization method`,`Cohens d`)  %>% 
+  group_by(gtc_shorthand) %>% 
+  nest() %>% 
+  mutate(krusk = map_dbl(data,~kruskal.test(.x$`Cohens d`,.x$`Harmonization method`) %>% broom::tidy() %>% pull(p.value) %>% round(3))) %>%
+  ungroup() %>% 
+  left_join(prob_of_sup %>% select(gtc_shorthand,probability_of_superiority,ci.lower,ci.upper),by="gtc_shorthand") %>% 
+  arrange(probability_of_superiority %>% desc) %>%
+  mutate(probability_of_superiority = probability_of_superiority %>% round(2),
+         median_ose_rg = map_dbl(data,~.x %>%
+                                   filter(`Harmonization method` == "OSE-RG") %>%
+                                   pull(`Cohens d`) %>% median),
+         median_ls = map_dbl(data,~.x %>%
+                               filter(`Harmonization method` == "Linear stretching") %>%
+                               pull(`Cohens d`) %>% median),
+         n = map_int(data,~.x %>% filter(`Harmonization method` == "OSE-RG") %>%
+                                   count %>% pull)) %>%
+  left_join(gtc_single_labels) %>%
+  mutate(pos_ci = paste0(probability_of_superiority," [",round(ci.lower,2),",",round(ci.upper,2),"]"),
+         order_fct_labels) %>% 
+  select(order_fct_labels,n,median_ose_rg,median_ls,pos_ci)
+
+
+names(prob_sup_data_table) <- c(
+  "Combination of linking and research population",
+  "n",
+  "Median harmonization error\nOSE-RG",
+  "Median harmonization error\nLS",
+  "Probability of superiority")
+
+prob_sup_data_table %>%
+  arrange(`Median harmonization error\nOSE-RG`) %>% 
+  select(-c(3,4)) %>% 
+  relocate(N=n,.after = last_col()) %>% 
+  kable(table.attr = "winst_and_quest<-analysis_data %>%
+hite-space: nowrap",digits = 2) %>% 
+  kable_classic()
+  
+prob_sup_data_table %>%
+  arrange(`Median harmonization error\nOSE-RG`) %>% 
+  select(-c(3,4))
+
+```
+
+
+
+## Table 7 Model parameters for GLM and LM
+### 7.1 Model parameters for GLM 
+```{r}
+model_4 %>% coef() %>% exp
+MASS::gamma.dispersion(model_4)
+AIC(model_4)
+#interpretation of coef
+0.1552*0.0953^0.01 #intercept*beta_1^value_of_similarity (Smithon 2020, p.233)
+
+1-0.09527
+model_4$model %>% nrow
+```
+```{r}
+#standard error of glm model on the target scale
+model_4 %>%
+  broom::tidy() %>%
+  transmute(estimate_target= exp(estimate),
+         upr_trgt_scale = exp(estimate+std.error),
+         lwr_trgt_scale = exp(estimate-std.error),
+         estimate_std_error_target_scale_upr = upr_trgt_scale-estimate_target,
+         estimate_std_error_target_scale_lwr = lwr_trgt_scale-estimate_target)
+#the standard error is not 
+```
+### 7.2 Model parameters for LM
+
+```{r}
+stretched_model<-lm(cohen_d_to_target_abs_stretched ~ similarity,analysis_data)
+AIC(stretched_model)
+stretched_model$model %>% nrow
+texreg::screenreg(stretched_model,stars = 0.05)
+```
+
+
+## Table 8 Conditional & Marginal R2 
+
+```{r}
+model_dependent_variable <- c("OSE-RG","OSE-RG","LS","LS","LS")
+included_vars <- c("random intercept + fixed slope","random intercept + random slope","random intercept","random intercept + fixed slope","random intercept + random slope")
+
+table_8<-tibble("Model"=model_dependent_variable,
+       "Parameters" = included_vars,
+       "R2 marginal" = c(mlm_models %>% map_dbl(~performance::r2(.x)$R2_marginal),mlm_model_stretched_models %>% map_dbl(~performance::r2(.x)$R2_marginal)),
+       "R2 conditional" = c(mlm_models %>% map_dbl(~performance::r2(.x)$R2_conditional),mlm_model_stretched_models %>% map_dbl(~performance::r2(.x)$R2_conditional))
+       ) %>% 
+  mutate(across(contains("R2"),~round(.x,2)),
+         Difference = `R2 conditional`-`R2 marginal`) %>% 
+  slice(c(1,3)) %>% 
+  select(-Parameters) %>% 
+  arrange(Model)
+table_8
+write_excel_csv2(table_8,"figures/table8.csv")
+```
+
+# 3. Appendix
+
+## Appendix 1 - r alerting
+
+This shows the similarity of the correlations of the instruments across the two surveys after the instrument with a low r-alerting value was removed. To see the results before the instrument was removed, open the markdown "r_alerting_17_inst.Rmd" and execute all chunks.
+
+```{r}
+r_alerting %>%
+  group_by(reference_instrument) %>%
+  summarize(estimate = cor.test(psych::fisherz(r_gpanel),psych::fisherz(r_evs))$estimate,
+            upr = cor.test(psych::fisherz(r_gpanel),psych::fisherz(r_evs))$conf.int[1],
+            lwr = cor.test(psych::fisherz(r_gpanel),psych::fisherz(r_evs))$conf.int[2]) %>%
+  filter(!(reference_instrument %in% grouping_variabels)) %>%
+  ggplot(aes(x=estimate,
+             y=reorder(str_to_sentence(reference_instrument),estimate),
+             xmin=lwr,
+             xmax=upr))+
+           geom_pointrange()+theme_classic(base_size = 20)+ theme(axis.text.x = element_text(angle = 80, vjust = 1, hjust=1))+labs(x = "r-alerting\n(95% CI)",y = "Instrument pairs")+
+  lims(x = c(0,1))
+ggsave("figures/appendix_1_2.svg",width = 8, height = 8)
+ggsave("figures/appendix_1_2.jpg",width = 8, height = 8,device = "jpeg")
+```
+
+
+## Appendix 3 - Grouping variables counts
+
+```{r}
+get_pop_tabels <- function(data,grouping_vars){
+  map_dfr(grouping_vars,~{
+    data %>% group_by(eval(sym(.x))) %>% count %>% rename(grouping_var = 1) %>% drop_na
+  })
+}
+
+socio_demo_table<-map(list(evs_analysis_data,gpanel_analysis_data),~{get_pop_tabels(.x,grouping_variabels)}) %>%
+  map2(.,c("N EVS","N GPANEL"),~{..1 %>% rename({{..2}} := 2)}) %>% 
+  reduce(left_join) %>% 
+  rename("Grouping variable" = 1) %>% 
+  mutate("Grouping variable" = str_to_sentence(`Grouping variable`))
+
+```
+```{r}
+write_excel_csv2(socio_demo_table,"figures/appendix_3_table.csv")
+```
+
+
+## Appendix 4 Tabel 1 GLM and LM model comparisons
+
+```{r}
+glm_list<-list(model_1,model_2,model_3,model_4)
+model_desc <- tribble(
+  ~family, ~"link function",
+  "gaussian","identity",
+  "gaussian","log",
+  "gamma","inverse",
+  "gamma","log"
+)
+r2<-glm_list %>% map(performance::r2) %>% map_df(~.x[1])
+aic<-glm_list %>% map_dbl(AIC)
+appendix_4_table_1<-bind_cols(model_desc,r2,aic) %>% 
+  mutate(R2 = coalesce(R2,R2_Nagelkerke) %>% round(2))%>% 
+  select(-R2_Nagelkerke) %>% 
+  rename("Family"=1,
+         "Link function"=2,
+         "AIC" = 4,
+         "R2"=3) %>% 
+  mutate(AIC = round(AIC)) %>% 
+  arrange(desc(AIC))
+
+appendix_4_table_1 %>% 
+  kable %>% 
+  kable_classic()
+```
+
+
+```{r}
+write_excel_csv2(appendix_4_table_1, "figures/appendix_4_table_1.csv")
+```
+
+## Appendix 4 Table 2
+
+```{r}
+model_dependent_variable <- c("OSE-RG","OSE-RG","linear stretching","linear stretching","linear stretching")
+included_vars <- c("random intercept + fixed slope","random intercept + random slope","random intercept","random intercept + fixed slope","random intercept + random slope")
+
+appendix_4_table_2<-tibble("Harmonization method"=model_dependent_variable,
+       "Parameters" = included_vars,
+       AIC = c(mlm_models %>% map_dbl(AIC),mlm_model_stretched_models %>% map_dbl(AIC)),
+       "R2 marginal" = c(mlm_models %>% map_dbl(~performance::r2(.x)$R2_marginal),mlm_model_stretched_models %>% map_dbl(~performance::r2(.x)$R2_marginal)),
+       "R2 conditional" = c(mlm_models %>% map_dbl(~performance::r2(.x)$R2_conditional),mlm_model_stretched_models %>% map_dbl(~performance::r2(.x)$R2_conditional))
+       ) %>% 
+  mutate(across(contains("R2"),~round(.x,2)),
+         AIC = AIC %>% round,
+         Difference = `R2 conditional`-`R2 marginal`) 
+
+appendix_4_table_2%>% 
+  kable %>% 
+  kable_classic()
+```
+
+```{r}
+write_excel_csv2(appendix_4_table_2,"figures/appendix_4_table_2.csv")
+```
+
+## Appendix 4 Table 3 and 4 - MLM model results extensive
+
+```{r }
+texreg::screenreg(mlm_models,stars=0.05,custom.note = c("Model 1 - Random intercept + fixed slope\nModel 2 - Random intercept + random slopes"))
+texreg::screenreg(mlm_model_stretched_models,stars=0.05,custom.note = c("Model 1 - Random intercept\nModel 2 - Random intercept + fixed slopes\nModel 3 - Random intercept + random slopes"))
+
+texreg::wordreg(mlm_models,
+               file = "/figures/mlm_models_OSE_RG.doc",
+               stars=0.05,
+               custom.note = c("Model 1 - Random intercept + fixed slope\nModel 2 - Random intercept + random slopes"))
+texreg::wordreg(mlm_model_stretched_models,
+               file = "/figures/mlm_model_LS.doc",
+               stars=0.05,
+               custom.note = c("Model 1 - Random intercept\nModel 2 - Random intercept + fixed slopes\nModel 3 - Random intercept + random slopes"))
+```
+
+
+# 4. Other data and results mentioned in the text
+
+## Methods 3.2 - Number of cases of the socio-demographic variables to be imputed 
+
+```{r}
+md.pattern(evs_to_impute %>% select(all_of(grouping_variabels_int))) #  -> 78 cases missing socio-demographics
+md.pattern(to_impute_gpanel %>% select(all_of(grouping_variabels_int))) # -> 58 cases missing socio-demographics
+```
+
+
+## Results 5.1 - 75% quantile of OSE-RG and LS errors
+```{r}
+analysis_data %>%
+  select(name,full_data,data,translation_table_used,contains("cohen_d_to_target_abs")) %>%
+  pivot_longer(contains("cohen"),names_to = "Harmonization method",values_to = "Cohens d") %>% 
+  filter(data == translation_table_used) %>% 
+  select(-c(data,translation_table_used)) %>% 
+  mutate(full_or_group = if_else(full_data == "Full population data","Full population\n(n=29)","Subpopulation\n(n=348)") %>% factor,
+         `Harmonization method` = if_else(`Harmonization method` == "cohen_d_to_target_abs","OSE-RG","Linear stretching") %>% factor(levels=c("Linear stretching","OSE-RG"),labels = c("Linear stretching","OSE-RG"))) %>% 
+  group_by(`Harmonization method`) %>% 
+  summarize(q75 = quantile(`Cohens d`,probs=0.75))
+```
+
+
+## Results 5.1 - Probability of superiority
+
+```{r}
+prob_of_sup_table_data_formated<-prob_of_sup_table_data %>% 
+  filter(gtc_equal == "identical") %>% 
+  select(-c(gtc_equal,SE,stretch_larger_than_ose_rg,dif)) %>% 
+  relocate(n = total, .before = median_ose_rg) %>%
+  mutate(across(where(is.numeric),~round(.x,2)),
+         pos_ci = paste0(probability_of_superiority," [",ci.lower,",",ci.upper,"]")) %>% 
+  select(-c(probability_of_superiority,ci.lower,ci.upper))
+
+names(prob_of_sup_table_data_formated) <- c(
+  "n",
+  "Median harmonization error\nOSE-RG",
+  "Median harmonization error\nLS",
+  "Probability of superiority"
+)
+prob_of_sup_table_data_formated 
+```
+
+
+## Appendix 4 Correlation between OSE-RG and LS harmonization error
+```{r}
+psych::cor.ci(analysis_data %>% select(cohen_d_to_target_abs,cohen_d_to_target_abs_stretched),plot=F)
+```

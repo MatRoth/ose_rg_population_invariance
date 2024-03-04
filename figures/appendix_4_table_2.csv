@@ -1,0 +1,6 @@
+﻿"Harmonization method";"Parameters";"AIC";"R2 marginal";"R2 conditional";"Difference"
+"OSE-RG";"random intercept + fixed slope";"-8798";"0,44";"0,46";"0,02"
+"OSE-RG";"random intercept + random slope";"-8840";"0,45";"0,48";"0,03"
+"linear stretching";"random intercept";"-5699";"0,00";"0,66";"0,66"
+"linear stretching";"random intercept + fixed slope";"-5699";"0,00";"0,67";"0,67"
+"linear stretching";"random intercept + random slope";"-5701";"0,00";"0,67";"0,67"
