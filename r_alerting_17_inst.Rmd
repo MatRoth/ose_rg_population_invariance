@@ -222,5 +222,6 @@ r_alerting %>%
   lims(x = c(-0.1,1))
 
 ggsave("figures/appendix_1_1.svg")
+ggsave("figures/appendix_1_1.jpg")
 ```
 
