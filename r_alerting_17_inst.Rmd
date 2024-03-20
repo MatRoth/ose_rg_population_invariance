@@ -221,7 +221,7 @@ r_alerting %>%
            geom_pointrange()+theme_classic(base_size = 20)+ theme(axis.text.x = element_text(angle = 80, vjust = 1, hjust=1))+labs(x = "r-alerting\n(95% CI)",y = "Instrument pairs")+
   lims(x = c(-0.1,1))
 
-ggsave("figures/appendix_1_1.svg")
-ggsave("figures/appendix_1_1.jpg")
+ggsave("figures/appendix_1_1.svg",width = 8, height = 8)
+ggsave("figures/appendix_1_1.jpg",width = 8, height = 8)
 ```
 
